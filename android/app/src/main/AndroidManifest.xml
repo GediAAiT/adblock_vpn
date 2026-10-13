@@ -1,6 +1,8 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- AdBlock VPN permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -43,6 +45,27 @@
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="specialUse"
             android:exported="false">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local DNS filtering to block advertising and tracking domains" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+        <!-- Our subclass supplies Android 14+ receiver registration flags. -->
+        <service android:name="de.blinkt.openvpn.core.OpenVPNService" tools:node="remove" />
+        <!-- Lint inspects this removal marker even though no activity is packaged. -->
+        <activity android:name="de.blinkt.openvpn.VPNHelper" tools:node="remove"
+            tools:ignore="Instantiatable" />
+        <activity android:name="de.blinkt.openvpn.LaunchVPN" tools:node="remove" />
+        <activity android:name="de.blinkt.openvpn.DisconnectVPNActivity"
+            android:exported="false" tools:replace="android:exported" />
+        <service
+            android:name=".RemoteVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User initiated OpenVPN tunnel with advertising filtering DNS" />
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>

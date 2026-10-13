@@ -42,7 +42,7 @@ class AdBlockVpnService : VpnService() {
         private const val IPV6_FAKE_DNS_ADDRESS = "fd00:1:fd00:1::1"
         private const val DNS_PORT = 53
 
-        private val DEFAULT_UPSTREAM_DNS = arrayOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
+        private val DEFAULT_UPSTREAM_DNS = arrayOf("94.140.14.14", "94.140.15.15")
         private val HARD_CODED_DNS_IPV4_ROUTES = arrayOf(
             "1.1.1.1",
             "1.0.0.1",
@@ -152,6 +152,22 @@ class AdBlockVpnService : VpnService() {
             "fwmrm.net",
             "spotxchange.com",
             "spotx.tv",
+            "smartclip.net",
+            "vidverto.io",
+            "trafficstars.com",
+            "clickadu.com",
+            "juicyads.com",
+            "onclickads.net",
+            "adkernel.com",
+            "adnuntius.com",
+            "teads.tv",
+            "rtbhouse.com",
+            "33across.com",
+            "gumgum.com",
+            "sovrn.com",
+            "lijit.com",
+            "bidvertiser.com",
+            "coinis.com",
             "springserve.com",
             "vidoomy.com",
             "lkqd.net",
@@ -176,6 +192,9 @@ class AdBlockVpnService : VpnService() {
         )
 
         @Volatile var isRunning: Boolean = false
+        @Volatile var state = "disconnected"
+        @Volatile var lastError = ""
+        @Volatile var totalBlocked = 0
         var statsChannel: MethodChannel? = null
 
         private val WHITESPACE = Regex("\\s+")
@@ -189,6 +208,12 @@ class AdBlockVpnService : VpnService() {
     private var workerThread: Thread? = null
     private val blockedCount = AtomicInteger(0)
     private lateinit var blocklist: HashSet<String>
+    private val cancelled = AtomicBoolean(false)
+    private val dnsWorkers = java.util.concurrent.ThreadPoolExecutor(
+        4, 4, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(128),
+        java.util.concurrent.ThreadPoolExecutor.DiscardPolicy()
+    )
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -197,14 +222,23 @@ class AdBlockVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             else -> {
+                if (state == "connecting" || running.get()) return START_NOT_STICKY
+                cancelled.set(false)
+                state = "connecting"
+                lastError = ""
                 startForegroundNotification()
                 // The bundled blocklist has tens of thousands of entries; load it
                 // off the main thread so service startup can't trigger an ANR.
                 thread(start = true, name = "AdBlockVpnStartup") {
-                    blocklist = loadBlocklist()
-                    startVpn()
+                    try {
+                        blocklist = loadBlocklist()
+                        synchronized(this) { if (!cancelled.get()) startVpn() }
+                    } catch (e: Exception) {
+                        lastError = e.message ?: "Unable to start DNS filtering"
+                        stopVpn()
+                    }
                 }
-                return START_STICKY
+                return START_NOT_STICKY
             }
         }
     }
@@ -353,36 +387,49 @@ class AdBlockVpnService : VpnService() {
         }
 
         vpnInterface = builder.establish()
-        if (vpnInterface == null) return
+        if (vpnInterface == null) throw IllegalStateException("VPN permission was revoked")
 
         running.set(true)
         isRunning = true
+        state = "connected"
+        totalBlocked = 0
 
         workerThread = thread(start = true, name = "AdBlockVpnDnsLoop") {
             runPacketLoop()
         }
     }
 
-    private fun stopVpn() {
+    @Synchronized private fun stopVpn() {
+        cancelled.set(true)
         running.set(false)
         isRunning = false
+        state = "disconnected"
+        dnsWorkers.shutdownNow()
         try {
             vpnInterface?.close()
         } catch (_: Exception) {
         }
         vpnInterface = null
-        stopForeground(true)
+        stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    override fun onDestroy() {
+    @Synchronized override fun onDestroy() {
+        cancelled.set(true)
         running.set(false)
         isRunning = false
+        state = "disconnected"
+        dnsWorkers.shutdownNow()
         try {
             vpnInterface?.close()
         } catch (_: Exception) {
         }
         super.onDestroy()
+    }
+
+    override fun onRevoke() {
+        stopVpn()
+        super.onRevoke()
     }
 
     private fun runPacketLoop() {
@@ -405,6 +452,7 @@ class AdBlockVpnService : VpnService() {
                 // Malformed or unsupported packet. Drop it and keep the VPN loop alive.
             }
         }
+        if (running.get()) stopVpn()
     }
 
     private fun handleIpPacket(packet: ByteArray, length: Int, output: FileOutputStream) {
@@ -482,7 +530,7 @@ class AdBlockVpnService : VpnService() {
         dstIp: InetAddress,
         dstPort: Int
     ) {
-        blockedCount.incrementAndGet()
+        totalBlocked = blockedCount.incrementAndGet()
         reportStats()
         val response = buildDnsNoDataResponse(dnsPayload, question)
         sendUdpResponse(output, srcIp, srcPort, dstIp, dstPort, response)
@@ -538,7 +586,9 @@ class AdBlockVpnService : VpnService() {
     private fun buildDnsNoDataResponse(query: ByteArray, question: DnsQuestion): ByteArray {
         val response = query.copyOf(question.endOffset)
         response[2] = (0x80 or (query[2].toInt() and 0x01)).toByte()
-        response[3] = 0x80.toByte()
+        // NXDOMAIN prevents ad SDKs from treating the empty answer as a
+        // successful lookup and retrying the same ad endpoint.
+        response[3] = 0x83.toByte()
         writeU16(response, 4, 1)
         writeU16(response, 6, 0)
         writeU16(response, 8, 0)
@@ -555,15 +605,16 @@ class AdBlockVpnService : VpnService() {
         requestedDnsPort: Int,
         output: FileOutputStream
     ) {
-        thread(start = true, name = "AdBlockVpnDnsForward") {
+        dnsWorkers.execute {
             var socket: DatagramSocket? = null
             try {
                 socket = DatagramSocket()
-                protect(socket)
+                if (!protect(socket)) return@execute
                 socket.soTimeout = 3500
 
                 for (upstream in upstreamResolversFor(requestedDnsIp)) {
                     try {
+                        socket.connect(upstream, DNS_PORT)
                         val outPacket = DatagramPacket(dnsQuery, dnsQuery.size, upstream, DNS_PORT)
                         socket.send(outPacket)
 
@@ -572,6 +623,11 @@ class AdBlockVpnService : VpnService() {
                         socket.receive(inPacket)
 
                         val reply = replyBuf.copyOfRange(0, inPacket.length)
+                        if (reply.size < 12 || readU16(reply, 0) != readU16(dnsQuery, 0) ||
+                            (reply[2].toInt() and 0x80) == 0) continue
+                        val replyQuestion = parseDnsQuestion(reply) ?: continue
+                        if (!replyQuestion.name.equals(question.name, ignoreCase = true) ||
+                            replyQuestion.type != question.type) continue
                         if (dnsResponseReferencesBlockedDomain(reply)) {
                             blockAndReply(
                                 dnsQuery,
@@ -585,7 +641,7 @@ class AdBlockVpnService : VpnService() {
                         } else {
                             sendUdpResponse(output, requestedDnsIp, requestedDnsPort, clientIp, clientPort, reply)
                         }
-                        return@thread
+                        return@execute
                     } catch (_: Exception) {
                         // Try the next resolver. If all fail, the client DNS stack will retry.
                     }
@@ -597,9 +653,7 @@ class AdBlockVpnService : VpnService() {
     }
 
     private fun upstreamResolversFor(requestedDnsIp: InetAddress): List<InetAddress> {
-        if (!isFakeDnsAddress(requestedDnsIp)) {
-            return listOf(requestedDnsIp)
-        }
+        // Always use filtering resolvers, including intercepted hardcoded DNS.
         return DEFAULT_UPSTREAM_DNS.mapNotNull {
             try {
                 InetAddress.getByName(it)

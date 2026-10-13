@@ -37,6 +37,10 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    packaging {
+        jniLibs.useLegacyPackaging = true
+    }
 }
 
 flutter {
@@ -46,4 +50,6 @@ flutter {
 dependencies {
     // Used by AdBlockVpnService for NotificationCompat.
     implementation("androidx.core:core-ktx:1.12.0")
+    // Pinned OpenVPN engine; the app owns permission and connection lifecycle.
+    implementation("com.github.nizwar:openvpn_library:b3941ef040")
 }
