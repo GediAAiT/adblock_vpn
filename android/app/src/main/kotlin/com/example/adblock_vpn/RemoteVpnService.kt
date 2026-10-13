@@ -11,6 +11,7 @@ import de.blinkt.openvpn.core.OpenVPNService
 class RemoteVpnService : OpenVPNService() {
     companion object {
         @Volatile var state = "disconnected"
+        @Volatile var lastError = ""
         @Volatile var serverName = ""
         @Volatile var bytesIn = 0L
         @Volatile var bytesOut = 0L
@@ -35,6 +36,11 @@ class RemoteVpnService : OpenVPNService() {
             ConnectionStatus.LEVEL_VPNPAUSED -> "paused"
             else -> "connecting"
         }
+        if (state == "error" || state == "no_network") {
+            lastError = message?.takeIf { it.isNotBlank() }
+                ?: "OpenVPN stopped: ${engineState ?: "unknown error"}"
+        }
+        if (state == "connected") lastError = ""
     }
 
     override fun updateByteCount(received: Long, sent: Long, diffIn: Long, diffOut: Long) {
@@ -45,6 +51,8 @@ class RemoteVpnService : OpenVPNService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        state = "disconnected"
+        if (state != "error" && state != "no_network") {
+            state = "disconnected"
+        }
     }
 }

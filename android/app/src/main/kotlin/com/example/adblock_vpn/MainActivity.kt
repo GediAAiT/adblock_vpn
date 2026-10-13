@@ -98,6 +98,7 @@ class MainActivity : FlutterActivity() {
                     "blockedCount" to AdBlockVpnService.totalBlocked,
                     "localError" to AdBlockVpnService.lastError,
                     "remoteState" to RemoteVpnService.state,
+                    "remoteError" to RemoteVpnService.lastError,
                     "serverName" to RemoteVpnService.serverName,
                     "bytesIn" to RemoteVpnService.bytesIn,
                     "bytesOut" to RemoteVpnService.bytesOut
@@ -136,6 +137,7 @@ class MainActivity : FlutterActivity() {
                     ?: throw IllegalStateException("Unable to prepare OpenVPN service")
                 intent.setClass(this, RemoteVpnService::class.java)
                 RemoteVpnService.serverName = profile.mName
+                RemoteVpnService.lastError = ""
                 RemoteVpnService.bytesIn = 0
                 RemoteVpnService.bytesOut = 0
                 RemoteVpnService.state = "connecting"
@@ -146,14 +148,21 @@ class MainActivity : FlutterActivity() {
             pendingResult = null
             pendingProfile = null
         } catch (e: Exception) {
-            RemoteVpnService.state = "disconnected"
+            RemoteVpnService.state = "error"
+            RemoteVpnService.lastError = e.message ?: "Unable to start OpenVPN"
             finishRequest("START_FAILED", e.message)
         }
     }
 
     private fun finishRequest(code: String, message: String?) {
         requestGeneration++
-        pendingResult?.error(code, message ?: code, null)
+        if (code == "CANCELLED") {
+            // Stopping a pending permission/profile request is an expected
+            // user action, not a failed start operation.
+            pendingResult?.success(null)
+        } else {
+            pendingResult?.error(code, message ?: code, null)
+        }
         pendingResult = null
         pendingProfile = null
     }

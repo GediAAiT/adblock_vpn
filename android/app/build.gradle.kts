@@ -39,7 +39,9 @@ android {
     }
 
     packaging {
-        jniLibs.useLegacyPackaging = true
+        // AGP 8.5+ packages native libraries for devices using 16 KB pages.
+        // The OpenVPN AAR must still provide ELF segments aligned to 16 KB.
+        jniLibs.useLegacyPackaging = false
     }
 }
 

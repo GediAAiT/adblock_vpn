@@ -122,7 +122,8 @@ class _HomePageState extends State<HomePage>
                 : 'Not protected';
         if (connected) _startedAt = null;
         if (active == 'error') {
-          _error = 'VPN connection failed. Refresh and choose another server.';
+          _error = state['remoteError'] as String? ??
+              'VPN connection failed. Refresh and choose another server.';
         }
         final nativeError = state['localError'] as String? ?? '';
         if (!_remoteMode && nativeError.isNotEmpty) _error = nativeError;
@@ -169,20 +170,23 @@ class _HomePageState extends State<HomePage>
   }
 
   Future<void> _toggle() async {
-    if (_busy || _loadingServers) return;
+    if (_loadingServers) return;
+    // A pending start is cancellable. Do not make the user wait for a failed
+    // connection before allowing the tunnel to be stopped.
+    final stopping = _isRunning || _busy;
     if (_remoteMode && !_isRunning && _selectedServer == null) {
       await _loadServers();
       if (!mounted || _selectedServer == null) return;
     }
-    _startedAt = DateTime.now();
+    if (!stopping) _startedAt = DateTime.now();
     _requestPending = true;
     setState(() {
       _busy = true;
       _error = null;
     });
-    setState(() => _status = _isRunning ? 'Stopping…' : 'Starting…');
+    setState(() => _status = stopping ? 'Stopping…' : 'Starting…');
     try {
-      if (_isRunning) {
+      if (stopping) {
         await _channel.invokeMethod('stopVpn');
       } else {
         if (_remoteMode) {
@@ -195,11 +199,14 @@ class _HomePageState extends State<HomePage>
         }
       }
     } catch (e) {
-      _startedAt = null;
+      // Native cancellation resolves the pending start request normally.
+      // Keep this guard for older installed builds that report cancellation
+      // as a platform error.
+      if (!stopping) _startedAt = null;
       if (mounted) {
         setState(() {
           _busy = false;
-          _error = '$e';
+          if (!stopping) _error = '$e';
         });
       }
     } finally {
@@ -429,7 +436,7 @@ class _HomePageState extends State<HomePage>
 
                     // Toggle Button
                     GestureDetector(
-                      onTap: _busy || _loadingServers ? null : _toggle,
+                      onTap: _loadingServers ? null : _toggle,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 300),
                         width: 240,
@@ -457,11 +464,9 @@ class _HomePageState extends State<HomePage>
                         ),
                         child: Center(
                           child: Text(
-                            _busy
-                                ? 'PLEASE WAIT…'
-                                : _isRunning
-                                    ? 'STOP PROTECTION'
-                                    : 'START PROTECTION',
+                            _isRunning || _busy
+                                ? 'STOP PROTECTION'
+                                : 'START PROTECTION',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 16,

@@ -209,7 +209,9 @@ class AdBlockVpnService : VpnService() {
     private val blockedCount = AtomicInteger(0)
     private lateinit var blocklist: HashSet<String>
     private val cancelled = AtomicBoolean(false)
-    private val dnsWorkers = java.util.concurrent.ThreadPoolExecutor(
+    private var dnsWorkers = newDnsWorkers()
+
+    private fun newDnsWorkers() = java.util.concurrent.ThreadPoolExecutor(
         4, 4, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
         java.util.concurrent.ArrayBlockingQueue<Runnable>(128),
         java.util.concurrent.ThreadPoolExecutor.DiscardPolicy()
@@ -366,6 +368,7 @@ class AdBlockVpnService : VpnService() {
 
     private fun startVpn() {
         if (running.get()) return
+        if (dnsWorkers.isShutdown) dnsWorkers = newDnsWorkers()
 
         val builder = Builder()
             .setSession("AdBlock VPN")
