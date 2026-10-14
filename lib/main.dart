@@ -167,7 +167,11 @@ class _HomePageState extends State<HomePage>
         _selectedServer = servers.first;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = 'Cannot load free servers: $e');
+      if (mounted) {
+        setState(() => _error = e is VpnGateLoadException
+            ? e.message
+            : 'Cannot load free servers. Check your connection and refresh.');
+      }
     } finally {
       if (mounted) setState(() => _loadingServers = false);
     }
@@ -329,18 +333,17 @@ class _HomePageState extends State<HomePage>
                             },
                     ),
                     const SizedBox(height: 28),
-                    if (!_remoteMode)
-                      TextButton.icon(
-                        icon: const Icon(Icons.tune),
-                        label: const Text('App compatibility'),
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => CompatibilityPage(
-                              readOnly: _isRunning || _busy,
-                            ),
+                    TextButton.icon(
+                      icon: const Icon(Icons.tune),
+                      label: const Text('App compatibility'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => CompatibilityPage(
+                            readOnly: _isRunning || _busy,
                           ),
                         ),
                       ),
+                    ),
                     if (_remoteMode) ...[
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),

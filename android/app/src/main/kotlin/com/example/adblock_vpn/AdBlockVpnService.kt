@@ -426,14 +426,15 @@ class AdBlockVpnService : VpnService() {
             .addRoute(IPV4_FAKE_DNS_ADDRESS, 32)
             .setMtu(1500)
 
-        getSharedPreferences("local_dns", MODE_PRIVATE)
-            .getStringSet("excludedPackages", emptySet())!!.forEach { packageName ->
-                try {
-                    builder.addDisallowedApplication(packageName)
-                } catch (_: PackageManager.NameNotFoundException) {
-                    // An uninstalled app must not prevent protection from starting.
-                }
+        // Keep server discovery and its secure DNS fallback off our own DNS
+        // routes, including while a previous local session is shutting down.
+        AppCompatibility.excludedPackages(this).forEach { packageName ->
+            try {
+                builder.addDisallowedApplication(packageName)
+            } catch (_: PackageManager.NameNotFoundException) {
+                // An uninstalled app must not prevent protection from starting.
             }
+        }
 
         if (!policy.compatibility) {
             HARD_CODED_DNS_IPV4_ROUTES.forEach { builder.addRoute(it, 32) }

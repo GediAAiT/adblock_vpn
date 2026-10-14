@@ -14,6 +14,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
   static const _channel = MethodChannel('com.example.adblock_vpn/vpn');
   final _domains = TextEditingController();
   bool _enabled = false;
+  bool _automaticHdoBypass = true;
   bool _loading = true;
   bool _saving = false;
   List<String> _recent = [];
@@ -59,6 +60,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
       setState(() {
         if (!recentOnly) {
           _enabled = settings['compatibility'] == true;
+          _automaticHdoBypass = settings['automaticHdoBypass'] != false;
           _domains.text =
               List<String>.from(settings['allowedDomains'] ?? []).join('\n');
           _excludedPackages =
@@ -88,6 +90,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
     try {
       await _channel.invokeMethod('setCompatibilitySettings', {
         'compatibility': _enabled,
+        'automaticHdoBypass': _automaticHdoBypass,
         'allowedDomains': _entries(),
         'excludedPackages': _excludedPackages.toList()..sort(),
       });
@@ -133,9 +136,9 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
         padding: const EdgeInsets.all(20),
         children: [
           const Text(
-            'For apps that stop working with ad blocking. These settings apply '
-            'to Local ad blocker only. Android still reports an active VPN, '
-            'and apps can still detect missing ads.',
+            'App bypass works in both Local ad blocker and Free VPN. '
+            'Bypassed apps use your normal connection and may show ads. '
+            'DNS compatibility and domain exceptions apply to local mode only.',
           ),
           if (widget.readOnly)
             const Padding(
@@ -145,6 +148,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
                       'refresh recent blocked domains while it is running.'),
             ),
           SwitchListTile(
+            key: const Key('dnsCompatibility'),
             contentPadding: EdgeInsets.zero,
             title: const Text('Compatibility mode'),
             subtitle: const Text('Use gentler DNS blocking and let apps use '
@@ -153,14 +157,26 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
             onChanged:
                 editable ? (value) => setState(() => _enabled = value) : null,
           ),
+          SwitchListTile(
+            key: const Key('automaticHdoBypass'),
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Automatic HDO Box compatibility'),
+            subtitle: const Text('Let HDO Box use your normal connection in '
+                'both modes. Other apps keep protection. Close and reopen '
+                'HDO Box after reconnecting. Android Private DNS still applies.'),
+            value: _automaticHdoBypass,
+            onChanged: editable
+                ? (value) => setState(() => _automaticHdoBypass = value)
+                : null,
+          ),
           ExpansionTile(
             tilePadding: EdgeInsets.zero,
             title: const Text('Apps that bypass protection'),
-            subtitle: Text('${_excludedPackages.length} selected'),
+            subtitle: Text('${_excludedPackages.length} selected manually'),
             children: [
               const Text('If an app such as HDO Box still refuses to work, '
                   'select it here. It will use your normal connection and may '
-                  'show ads. Other apps keep local protection. Save, start '
+                  'show ads. Other apps keep protection. Save, start '
                   'protection, then close and reopen the selected app. '
                   'This cannot guarantee that every VPN check will pass.'),
               TextField(
@@ -185,8 +201,12 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
                       CheckboxListTile(
                         title: Text(app.value),
                         subtitle: Text(app.key),
-                        value: _excludedPackages.contains(app.key),
-                        onChanged: editable
+                        value: _excludedPackages.contains(app.key) ||
+                            (_automaticHdoBypass &&
+                                app.key == 'com.hdoapp.hdo_box'),
+                        onChanged: editable &&
+                                !(_automaticHdoBypass &&
+                                    app.key == 'com.hdoapp.hdo_box')
                             ? (selected) => setState(() {
                                   if (selected == true) {
                                     _excludedPackages.add(app.key);

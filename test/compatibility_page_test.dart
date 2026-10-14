@@ -53,7 +53,10 @@ void main() {
         const MaterialApp(home: CompatibilityPage(readOnly: false)));
     await tester.pumpAndSettle();
     expect(
-        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value, true);
+        tester
+            .widget<SwitchListTile>(find.byKey(const Key('dnsCompatibility')))
+            .value,
+        true);
     await tester.ensureVisible(find.text('Allow'));
     await tester.tap(find.text('Allow'));
     await tester.pump();
@@ -63,6 +66,7 @@ void main() {
     expect(calls.last.method, 'setCompatibilitySettings');
     expect(calls.last.arguments, {
       'compatibility': true,
+      'automaticHdoBypass': true,
       'allowedDomains': ['api.example.com', 'ads.example.com'],
       'excludedPackages': ['com.example.video'],
     });
@@ -129,5 +133,22 @@ void main() {
         calls.lastWhere((call) => call.method == 'setCompatibilitySettings');
     expect(save.arguments['excludedPackages'], ['com.example.browser']);
     expect(save.arguments['allowedDomains'], ['api.example.com']);
+  });
+
+  testWidgets('HDO automatic bypass defaults on and can be disabled',
+      (tester) async {
+    await tester.pumpWidget(
+        const MaterialApp(home: CompatibilityPage(readOnly: false)));
+    await tester.pumpAndSettle();
+    final automatic = find.byKey(const Key('automaticHdoBypass'));
+    expect(tester.widget<SwitchListTile>(automatic).value, true);
+    await tester.tap(automatic);
+    await tester.pump();
+    await tester.ensureVisible(find.text('Save settings'));
+    await tester.tap(find.text('Save settings'));
+    await tester.pumpAndSettle();
+    final save =
+        calls.lastWhere((call) => call.method == 'setCompatibilitySettings');
+    expect(save.arguments['automaticHdoBypass'], false);
   });
 }

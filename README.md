@@ -43,7 +43,15 @@ The project currently signs release builds with the development debug key. Confi
 
 ## Ad-blocking limits and verification
 
-### App compatibility (local mode)
+### App compatibility
+
+**Automatic HDO Box compatibility** is enabled by default. When the installed
+package `com.hdoapp.hdo_box` is present, both Local ad blocker and Free VPN
+exclude it from the tunnel. HDO Box uses the normal connection and may load
+ads; other apps keep protection. Close and reopen HDO Box after reconnecting.
+You can disable this in **App compatibility** while protection is stopped.
+This does not override filtering configured in Android Private DNS or on a
+router, and does not guarantee that every app check will pass.
 
 If HDO Box or another app stops when filtering is enabled, stop protection and
 open **App compatibility**. Enable **Compatibility mode**, save, and start local
@@ -56,10 +64,10 @@ queries reaching the local VPN. Apps using their own DNS may show more ads.
 
 If an app still refuses to work, stop protection and open **App compatibility →
 Apps that bypass protection**. Search for the installed app, select it, save,
-restart local protection, and close and reopen the affected app. Selected apps
-use the normal network outside the local VPN and are not ad-filtered by this
-app; other apps remain protected. Selections persist, apply in either local
-mode, and can be removed to restore filtering. The picker lists launchable
+restart protection, and close and reopen the affected app. Selected apps
+use the normal network outside the VPN and are not ad-filtered by this
+app; other apps remain protected. Selections persist, apply in both VPN
+modes, and can be removed to restore filtering. The picker lists launchable
 apps without requesting unrestricted installed-app access. Uninstalled app
 selections can be removed and do not prevent the VPN from starting. Android's
 VPN indicator remains visible, and some apps may still detect the VPN.
@@ -76,7 +84,18 @@ you have tested. No HDO-specific domains are guessed or automatically allowed.
 The recent list covers all apps without attributing requests to an app, stays
 only in process memory, and clears when local protection starts or when you
 tap **Clear history**. Settings cannot be saved while protection is active.
-These settings do not change Free VPN mode.
+DNS compatibility and domain exceptions apply only in Local ad blocker mode.
+Automatic HDO Box bypass and manually selected app bypasses apply in both modes.
+
+Server discovery first uses normal HTTPS. If system DNS or the connection
+fails, it resolves the VPN Gate hostname over HTTPS using Cloudflare and then
+Google, and retries up to two returned IPv4 addresses. The HTTPS request keeps
+the original hostname, SNI, and certificate verification. Downloads and retries
+are bounded. Discovery traffic bypasses this app's own filtering in both modes.
+If the network still cannot reach VPN Gate, the app shows a retry message;
+previously loaded servers remain available during that app session. Run
+`dart run tool/check_vpn_api.dart --dns-fallback` to test real discovery with
+a simulated system DNS failure.
 
 **Stop protection** sends an explicit shutdown command to the local VPN, closes
 its tunnel and active DNS sockets, cancels queued DNS work and pending startup,

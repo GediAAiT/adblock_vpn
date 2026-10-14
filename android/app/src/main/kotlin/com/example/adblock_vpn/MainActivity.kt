@@ -34,6 +34,7 @@ class MainActivity : FlutterActivity() {
                     val prefs = getSharedPreferences("local_dns", MODE_PRIVATE)
                     result.success(mapOf(
                         "compatibility" to prefs.getBoolean("compatibility", false),
+                        "automaticHdoBypass" to prefs.getBoolean("automaticHdoBypass", true),
                         "allowedDomains" to prefs.getStringSet("allowedDomains", emptySet())!!.sorted(),
                         "excludedPackages" to prefs.getStringSet("excludedPackages", emptySet())!!.sorted(),
                         "recentBlockedDomains" to AdBlockVpnService.recentBlockedDomains()
@@ -73,6 +74,7 @@ class MainActivity : FlutterActivity() {
                         }) { "Select up to 100 apps to bypass protection." }
                         getSharedPreferences("local_dns", MODE_PRIVATE).edit()
                             .putBoolean("compatibility", call.argument<Boolean>("compatibility") ?: false)
+                            .putBoolean("automaticHdoBypass", call.argument<Boolean>("automaticHdoBypass") ?: true)
                             .putStringSet("allowedDomains", domains)
                             .putStringSet("excludedPackages", excluded).apply()
                         result.success(null)
@@ -113,6 +115,8 @@ class MainActivity : FlutterActivity() {
                                 profile.mUseDefaultRoutev6 = true
                                 profile.mBlockUnusedAddressFamilies = true
                                 profile.mAllowAppVpnBypass = false
+                                profile.mAllowedAppsVpnAreDisallowed = true
+                                profile.mAllowedAppsVpn = HashSet(AppCompatibility.excludedPackages(this))
                                 val error = profile.checkProfile(this)
                                 require(error == de.blinkt.openvpn.R.string.no_error_found) { getString(error) }
                                 runOnUiThread {

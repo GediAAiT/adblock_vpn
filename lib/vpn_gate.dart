@@ -4,34 +4,104 @@ import 'dart:io';
 
 /// VPN Gate's public HTTPS API returns a CSV server list with OpenVPN profiles.
 class VpnGateApi {
+  VpnGateApi({VpnGateTransport? transport})
+      : _transport = transport ?? VpnGateTransport();
+
   static final endpoint = Uri.parse('https://www.vpngate.net/api/iphone/');
+  final VpnGateTransport _transport;
 
   Future<List<VpnServer>> fetchServers() async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
     try {
-      return await _fetch(client).timeout(const Duration(seconds: 30));
-    } finally {
-      client.close(force: true);
+      try {
+        return parseServers(await _transport.getText(endpoint));
+      } on SocketException {
+        return await _fetchWithEncryptedDns();
+      } on TimeoutException {
+        return await _fetchWithEncryptedDns();
+      }
+    } on HandshakeException {
+      throw const VpnGateLoadException(
+          'Could not verify the secure connection to VPN Gate. '
+          'Check your phone’s date and time, or try another network.');
+    } on FormatException {
+      throw const VpnGateLoadException(
+          'VPN Gate returned an unusable server list. Please refresh later.');
+    } on HttpException {
+      throw const VpnGateLoadException(
+          'VPN Gate is temporarily unavailable. Please refresh later.');
     }
   }
 
-  Future<List<VpnServer>> _fetch(HttpClient client) async {
-    final request = await client.getUrl(endpoint);
-    request.followRedirects = false;
-    request.headers.set(HttpHeaders.acceptHeader, 'text/plain,text/csv');
-    final response = await request.close();
-    if (response.statusCode != HttpStatus.ok) {
-      throw HttpException('VPN Gate returned HTTP ${response.statusCode}');
-    }
-    final bytes = <int>[];
-    await for (final chunk in response) {
-      if (bytes.length + chunk.length > 8 * 1024 * 1024) {
-        throw const FormatException('VPN server list is too large');
+  Future<List<VpnServer>> _fetchWithEncryptedDns() async {
+    // Bootstrap HTTPS DNS with a resolver IP so broken system DNS cannot
+    // prevent the fallback itself. Both IPs have valid HTTPS certificates.
+    final addresses = <InternetAddress>[];
+    for (final resolver in ['1.1.1.1', '8.8.8.8']) {
+      try {
+        final text = await _transport.getText(
+          Uri.https(resolver, resolver == '1.1.1.1' ? '/dns-query' : '/resolve',
+              {'name': endpoint.host, 'type': 'A'}),
+          timeout: const Duration(seconds: 8),
+          maxBytes: 64 * 1024,
+        );
+        final data = jsonDecode(text);
+        if (data is! Map || data['Status'] != 0 || data['Answer'] is! List) {
+          continue;
+        }
+        final seen = <String>{};
+        for (final answer in data['Answer'] as List) {
+          if (answer is! Map ||
+              answer['type'] != 1 ||
+              answer['data'] is! String) {
+            continue;
+          }
+          final address = InternetAddress.tryParse(answer['data'] as String);
+          if (address != null &&
+              _isPublicIpv4(address) &&
+              seen.add(address.address)) {
+            addresses.add(address);
+          }
+        }
+        if (addresses.isNotEmpty) break;
+      } on IOException {
+        continue;
+      } on TimeoutException {
+        continue;
+      } on FormatException {
+        continue;
       }
-      bytes.addAll(chunk);
     }
-    return parseServers(utf8.decode(bytes));
+    // Keep the original HTTPS hostname for TLS/SNI and certificate validation.
+    // Retry a few live DNS answers; never ship fixed VPN Gate server IPs.
+    for (final address in addresses.take(2)) {
+      try {
+        return parseServers(await _transport.getText(endpoint,
+            connectAddress: address, timeout: const Duration(seconds: 20)));
+      } on SocketException {
+        continue;
+      } on TimeoutException {
+        continue;
+      } on HttpException {
+        continue;
+      }
+    }
+    throw const VpnGateLoadException(
+        'Cannot reach VPN Gate after retrying with secure DNS. '
+        'Check your internet connection or try another Wi-Fi/mobile network, '
+        'then refresh. Local ad blocker is still available.');
+  }
+
+  static bool _isPublicIpv4(InternetAddress address) {
+    if (address.type != InternetAddressType.IPv4) return false;
+    final b = address.rawAddress;
+    return !(b[0] == 0 ||
+        b[0] == 10 ||
+        b[0] == 127 ||
+        b[0] >= 224 ||
+        (b[0] == 100 && b[1] >= 64 && b[1] <= 127) ||
+        (b[0] == 169 && b[1] == 254) ||
+        (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+        (b[0] == 192 && b[1] == 168));
   }
 
   static List<VpnServer> parseServers(String csv) {
@@ -123,6 +193,89 @@ class VpnGateApi {
       rows.add(row);
     }
     return rows;
+  }
+}
+
+class VpnGateLoadException implements Exception {
+  const VpnGateLoadException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// Bounded HTTPS downloads; injectable so DNS failures can be tested offline.
+class VpnGateTransport {
+  Future<String> getText(
+    Uri uri, {
+    InternetAddress? connectAddress,
+    Duration timeout = const Duration(seconds: 10),
+    int maxBytes = 8 * 1024 * 1024,
+  }) async {
+    final client = HttpClient()..connectionTimeout = timeout;
+    if (connectAddress != null) {
+      client.findProxy = (_) => 'DIRECT';
+      client.connectionFactory = (target, proxyHost, proxyPort) async {
+        if (target != uri || target.scheme != 'https') {
+          throw const HttpException('Unexpected download destination');
+        }
+        // A custom HttpClient factory must provide TLS itself. Passing a raw
+        // socket here would send plaintext to port 443 and hang the request.
+        final task = await Socket.startConnect(connectAddress, target.port);
+        Socket? activeSocket;
+        var cancelled = false;
+        final secureSocket = task.socket.then((socket) async {
+          activeSocket = socket;
+          if (cancelled) {
+            socket.destroy();
+            throw const SocketException('Connection cancelled');
+          }
+          try {
+            final secure = await SecureSocket.secure(socket, host: target.host);
+            activeSocket = secure;
+            if (cancelled) {
+              secure.destroy();
+              throw const SocketException('Connection cancelled');
+            }
+            return secure;
+          } catch (_) {
+            socket.destroy();
+            rethrow;
+          }
+        });
+        return ConnectionTask.fromSocket(secureSocket, () {
+          cancelled = true;
+          task.cancel();
+          activeSocket?.destroy();
+        });
+      };
+    }
+    Future<String> read() async {
+      final request = await client.getUrl(uri);
+      request.followRedirects = false;
+      request.headers.set(
+          HttpHeaders.acceptHeader,
+          uri.path == '/dns-query'
+              ? 'application/dns-json'
+              : 'text/plain,text/csv');
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) {
+        throw HttpException('Server returned HTTP ${response.statusCode}');
+      }
+      final bytes = <int>[];
+      await for (final chunk in response) {
+        if (bytes.length + chunk.length > maxBytes) {
+          throw const FormatException('Server response is too large');
+        }
+        bytes.addAll(chunk);
+      }
+      return utf8.decode(bytes);
+    }
+
+    try {
+      return await read().timeout(timeout);
+    } finally {
+      client.close(force: true);
+    }
   }
 }
 
