@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'vpn_gate.dart';
+import 'compatibility_page.dart';
 
 void main() => runApp(const AdBlockApp());
 
@@ -49,6 +50,8 @@ class _HomePageState extends State<HomePage>
   bool _loadingServers = false;
   bool _refreshing = false;
   bool _requestPending = false;
+  bool _stopping = false;
+  int _operation = 0;
   List<VpnServer> _servers = [];
   VpnServer? _selectedServer;
   String? _error;
@@ -91,9 +94,10 @@ class _HomePageState extends State<HomePage>
   Future<void> _refreshState() async {
     if (_refreshing) return;
     _refreshing = true;
+    final operation = _operation;
     try {
       final state = await _channel.invokeMapMethod<String, dynamic>('getState');
-      if (!mounted || state == null) return;
+      if (!mounted || state == null || operation != _operation) return;
       final local = state['localState'] ?? 'disconnected';
       final remote = state['remoteState'] ?? 'disconnected';
       if (remote != 'disconnected') {
@@ -130,7 +134,7 @@ class _HomePageState extends State<HomePage>
       });
       if (timedOut) {
         _startedAt = null;
-        await _channel.invokeMethod('stopVpn');
+        await _stopProtection();
         if (mounted) {
           setState(() {
             _error =
@@ -170,47 +174,73 @@ class _HomePageState extends State<HomePage>
   }
 
   Future<void> _toggle() async {
-    if (_loadingServers) return;
+    if (_stopping) return;
     // A pending start is cancellable. Do not make the user wait for a failed
     // connection before allowing the tunnel to be stopped.
     final stopping = _isRunning || _busy;
+    if (stopping) {
+      await _stopProtection();
+      return;
+    }
+    if (_loadingServers) return;
     if (_remoteMode && !_isRunning && _selectedServer == null) {
       await _loadServers();
       if (!mounted || _selectedServer == null) return;
     }
-    if (!stopping) _startedAt = DateTime.now();
+    final operation = ++_operation;
+    _startedAt = DateTime.now();
     _requestPending = true;
     setState(() {
       _busy = true;
       _error = null;
     });
-    setState(() => _status = stopping ? 'Stopping…' : 'Starting…');
+    setState(() => _status = 'Starting…');
     try {
-      if (stopping) {
-        await _channel.invokeMethod('stopVpn');
+      if (_remoteMode) {
+        await _channel.invokeMethod('startRemoteVpn', {
+          'config': _selectedServer!.config,
+          'name': _selectedServer!.label,
+        });
       } else {
-        if (_remoteMode) {
-          await _channel.invokeMethod('startRemoteVpn', {
-            'config': _selectedServer!.config,
-            'name': _selectedServer!.label,
-          });
-        } else {
-          await _channel.invokeMethod('startVpn');
-        }
+        await _channel.invokeMethod('startVpn');
       }
     } catch (e) {
       // Native cancellation resolves the pending start request normally.
       // Keep this guard for older installed builds that report cancellation
       // as a platform error.
-      if (!stopping) _startedAt = null;
-      if (mounted) {
+      if (mounted && operation == _operation) {
+        _startedAt = null;
         setState(() {
           _busy = false;
-          if (!stopping) _error = '$e';
+          _error = '$e';
         });
       }
     } finally {
+      if (operation == _operation) {
+        _requestPending = false;
+        if (mounted) await _refreshState();
+      }
+    }
+  }
+
+  Future<void> _stopProtection() async {
+    if (_stopping) return;
+    ++_operation; // Ignore late completions from a cancelled start or state poll.
+    _startedAt = null;
+    setState(() {
+      _stopping = true;
+      _requestPending = true;
+      _busy = true;
+      _status = 'Stopping…';
+      _error = null;
+    });
+    try {
+      await _channel.invokeMethod('stopVpn');
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Cannot stop protection: $e');
+    } finally {
       _requestPending = false;
+      _stopping = false;
       if (mounted) await _refreshState();
     }
   }
@@ -299,6 +329,18 @@ class _HomePageState extends State<HomePage>
                             },
                     ),
                     const SizedBox(height: 28),
+                    if (!_remoteMode)
+                      TextButton.icon(
+                        icon: const Icon(Icons.tune),
+                        label: const Text('App compatibility'),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => CompatibilityPage(
+                              readOnly: _isRunning || _busy,
+                            ),
+                          ),
+                        ),
+                      ),
                     if (_remoteMode) ...[
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -436,7 +478,10 @@ class _HomePageState extends State<HomePage>
 
                     // Toggle Button
                     GestureDetector(
-                      onTap: _loadingServers ? null : _toggle,
+                      onTap: _stopping ||
+                              (_loadingServers && !_busy && !_isRunning)
+                          ? null
+                          : _toggle,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 300),
                         width: 240,
@@ -483,11 +528,7 @@ class _HomePageState extends State<HomePage>
                             _remoteState != 'disconnected' &&
                             !_isRunning))
                       TextButton(
-                          onPressed: () async {
-                            _startedAt = null;
-                            await _channel.invokeMethod('stopVpn');
-                            await _refreshState();
-                          },
+                          onPressed: _stopping ? null : _stopProtection,
                           child: const Text('Cancel connection')),
 
                     Padding(

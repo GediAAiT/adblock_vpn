@@ -43,9 +43,56 @@ The project currently signs release builds with the development debug key. Confi
 
 ## Ad-blocking limits and verification
 
+### App compatibility (local mode)
+
+If HDO Box or another app stops when filtering is enabled, stop protection and
+open **App compatibility**. Enable **Compatibility mode**, save, and start local
+protection again. This returns NOERROR with no answers for blocked queries,
+uses Cloudflare's non-filtering DNS (`1.1.1.1`, `1.0.0.1`) for permitted queries,
+and routes only the VPN's virtual DNS addresses. Public resolver IPs and known
+encrypted DNS hostnames remain reachable, avoiding broken HTTPS/TCP connections
+to intercepted resolver addresses. The bundled ad blocklist still applies to
+queries reaching the local VPN. Apps using their own DNS may show more ads.
+
+If an app still refuses to work, stop protection and open **App compatibility →
+Apps that bypass protection**. Search for the installed app, select it, save,
+restart local protection, and close and reopen the affected app. Selected apps
+use the normal network outside the local VPN and are not ad-filtered by this
+app; other apps remain protected. Selections persist, apply in either local
+mode, and can be removed to restore filtering. The picker lists launchable
+apps without requesting unrestricted installed-app access. Uninstalled app
+selections can be removed and do not prevent the VPN from starting. Android's
+VPN indicator remains visible, and some apps may still detect the VPN.
+
+For a remaining failure, reproduce it and open **App compatibility → Refresh**
+to inspect the latest 30 locally blocked domain names. Stop protection, add a
+specific hostname using **Allow** or the text field, save, restart protection,
+and reopen the affected app. Exceptions persist and apply in both local modes;
+each exact hostname and its DNS alias chain can resolve through non-filtering
+DNS. Subdomains need separate entries. Remove an exception to restore filtering.
+Exceptions affect all apps and can allow ads or tracking, so add only domains
+you have tested. No HDO-specific domains are guessed or automatically allowed.
+
+The recent list covers all apps without attributing requests to an app, stays
+only in process memory, and clears when local protection starts or when you
+tap **Clear history**. Settings cannot be saved while protection is active.
+These settings do not change Free VPN mode.
+
+**Stop protection** sends an explicit shutdown command to the local VPN, closes
+its tunnel and active DNS sockets, cancels queued DNS work and pending startup,
+and removes its notification. The notification also has a **Stop protection**
+action. Cancelling a remote connection does not require downloading a server
+list; a late start response cannot replace the cancellation result. Failed
+stop requests are shown in the app so they can be retried.
+
+This is a compatibility aid, not guaranteed anti-detection: Android exposes VPN
+state and apps can detect missing ad content even with successful DNS replies.
+DNS filtering cannot synthesize valid HTTPS ad responses or hide the VPN from
+Android. HDO Box playback and detection behavior require testing on your device.
+
 This can block known third-party advertising domains used by SDKs such as AdMob, AppLovin, Vungle and Unity Ads. It cannot promise 100% ad removal in MovieBox, HDO Stream, or any other app. Ads sharing a domain with video/API content, cached ads, direct-IP advertising, and apps using their own encrypted DNS can bypass DNS filtering. Blocking shared video domains can break playback. Android Private DNS can also bypass the VPN's DNS settings; test with Private DNS off when diagnosing ads.
 
-In local mode, the counter measures locally blocked DNS requests, not visible ads or additional blocks performed by AdGuard. Known resolver IP routes are intercepted, but this service only processes UDP DNS; TCP DNS and non-DNS connections to those IPs are not supported. Use remote mode if you need a full traffic tunnel.
+In local mode, the counter measures locally blocked DNS requests, not visible ads or additional blocks performed by AdGuard. With compatibility mode off, known resolver IP routes are intercepted, but this service only processes UDP DNS; TCP DNS and non-DNS connections to those IPs are not supported. Compatibility mode leaves public resolver IPs outside those routes. Use remote mode if you need a full traffic tunnel.
 
 Validate on the actual phone and app versions:
 

@@ -3,9 +3,12 @@ package com.example.adblock_vpn
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import io.flutter.plugin.common.MethodChannel
@@ -25,8 +28,8 @@ import kotlin.math.min
  *
  * This service keeps the VPN lightweight by handling DNS traffic only. Normal
  * app traffic is not proxied. It blocks known ad/tracker hostnames, catches
- * common hardcoded DNS resolvers, and returns empty successful DNS answers so
- * ad SDKs fail quietly without surfacing resolver errors to the user.
+ * common hardcoded DNS resolvers in strict mode. Compatibility mode uses empty
+ * successful answers and narrower routes; it cannot hide Android's VPN state.
  */
 class AdBlockVpnService : VpnService() {
 
@@ -42,7 +45,6 @@ class AdBlockVpnService : VpnService() {
         private const val IPV6_FAKE_DNS_ADDRESS = "fd00:1:fd00:1::1"
         private const val DNS_PORT = 53
 
-        private val DEFAULT_UPSTREAM_DNS = arrayOf("94.140.14.14", "94.140.15.15")
         private val HARD_CODED_DNS_IPV4_ROUTES = arrayOf(
             "1.1.1.1",
             "1.0.0.1",
@@ -197,19 +199,36 @@ class AdBlockVpnService : VpnService() {
         @Volatile var totalBlocked = 0
         var statsChannel: MethodChannel? = null
 
+        // Bounded, memory-only diagnostics. Never infer which app made a query.
+        private val recentBlocked = LinkedHashSet<String>()
+        fun recentBlockedDomains(): List<String> = synchronized(recentBlocked) {
+            recentBlocked.toList().asReversed()
+        }
+        fun clearRecentBlockedDomains() = synchronized(recentBlocked) { recentBlocked.clear() }
+        private fun recordBlocked(host: String) = synchronized(recentBlocked) {
+            val normalized = LocalDnsPolicy.normalize(host)
+            recentBlocked.remove(normalized)
+            recentBlocked.add(normalized)
+            while (recentBlocked.size > 30) recentBlocked.remove(recentBlocked.first())
+        }
+
         private val WHITESPACE = Regex("\\s+")
     }
 
     private data class DnsName(val value: String, val nextOffset: Int)
     private data class DnsQuestion(val name: String, val type: Int, val endOffset: Int)
 
-    private var vpnInterface: ParcelFileDescriptor? = null
+    @Volatile private var vpnInterface: ParcelFileDescriptor? = null
     private val running = AtomicBoolean(false)
     private var workerThread: Thread? = null
     private val blockedCount = AtomicInteger(0)
     private lateinit var blocklist: HashSet<String>
     private val cancelled = AtomicBoolean(false)
+    private val mainHandler by lazy { Handler(mainLooper) }
+    private var startupGeneration = 0
+    private val activeSockets = HashSet<DatagramSocket>()
     private var dnsWorkers = newDnsWorkers()
+    private var policy = LocalDnsPolicy()
 
     private fun newDnsWorkers() = java.util.concurrent.ThreadPoolExecutor(
         4, 4, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
@@ -223,23 +242,47 @@ class AdBlockVpnService : VpnService() {
                 stopVpn()
                 return START_NOT_STICKY
             }
-            else -> {
+            ACTION_CONNECT -> {
                 if (state == "connecting" || running.get()) return START_NOT_STICKY
                 cancelled.set(false)
                 state = "connecting"
                 lastError = ""
+                val generation = ++startupGeneration
                 startForegroundNotification()
                 // The bundled blocklist has tens of thousands of entries; load it
                 // off the main thread so service startup can't trigger an ANR.
                 thread(start = true, name = "AdBlockVpnStartup") {
                     try {
-                        blocklist = loadBlocklist()
-                        synchronized(this) { if (!cancelled.get()) startVpn() }
+                        val loadedBlocklist = loadBlocklist()
+                        val prefs = getSharedPreferences("local_dns", MODE_PRIVATE)
+                        val loadedPolicy = LocalDnsPolicy(
+                            prefs.getBoolean("compatibility", false),
+                            prefs.getStringSet("allowedDomains", emptySet())!!.toSet()
+                        )
+                        mainHandler.post {
+                            if (cancelled.get() || generation != startupGeneration) return@post
+                            try {
+                                blocklist = loadedBlocklist
+                                policy = loadedPolicy
+                                startVpn()
+                            } catch (e: Exception) {
+                                lastError = e.message ?: "Unable to start DNS filtering"
+                                stopVpn()
+                            }
+                        }
                     } catch (e: Exception) {
-                        lastError = e.message ?: "Unable to start DNS filtering"
-                        stopVpn()
+                        mainHandler.post {
+                            if (!cancelled.get() && generation == startupGeneration) {
+                                lastError = e.message ?: "Unable to start DNS filtering"
+                                stopVpn()
+                            }
+                        }
                     }
                 }
+                return START_NOT_STICKY
+            }
+            else -> {
+                stopVpn()
                 return START_NOT_STICKY
             }
         }
@@ -255,9 +298,14 @@ class AdBlockVpnService : VpnService() {
         }
         val notification: Notification = NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
             .setContentTitle("AdBlock VPN")
-            .setContentText("Blocking ads system-wide")
+            .setContentText("Filtering DNS for protected apps")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setOngoing(true)
+            .addAction(0, "Stop protection", PendingIntent.getService(
+                this, 0, Intent(this, AdBlockVpnService::class.java).apply {
+                    action = ACTION_DISCONNECT
+                }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            ))
             .build()
         startForeground(NOTIF_ID, notification)
     }
@@ -351,6 +399,7 @@ class AdBlockVpnService : VpnService() {
     }
 
     private fun isBlocked(host: String): Boolean {
+        if (policy.bypassBlocklist(host)) return false
         var current = normalizeDnsHost(host) ?: return false
         while (true) {
             if (blocklist.contains(current)) return true
@@ -377,14 +426,27 @@ class AdBlockVpnService : VpnService() {
             .addRoute(IPV4_FAKE_DNS_ADDRESS, 32)
             .setMtu(1500)
 
-        HARD_CODED_DNS_IPV4_ROUTES.forEach { builder.addRoute(it, 32) }
+        getSharedPreferences("local_dns", MODE_PRIVATE)
+            .getStringSet("excludedPackages", emptySet())!!.forEach { packageName ->
+                try {
+                    builder.addDisallowedApplication(packageName)
+                } catch (_: PackageManager.NameNotFoundException) {
+                    // An uninstalled app must not prevent protection from starting.
+                }
+            }
+
+        if (!policy.compatibility) {
+            HARD_CODED_DNS_IPV4_ROUTES.forEach { builder.addRoute(it, 32) }
+        }
 
         try {
             builder
                 .addAddress(IPV6_VPN_ADDRESS, 128)
                 .addDnsServer(IPV6_FAKE_DNS_ADDRESS)
                 .addRoute(IPV6_FAKE_DNS_ADDRESS, 128)
-            HARD_CODED_DNS_IPV6_ROUTES.forEach { builder.addRoute(it, 128) }
+            if (!policy.compatibility) {
+                HARD_CODED_DNS_IPV6_ROUTES.forEach { builder.addRoute(it, 128) }
+            }
         } catch (_: Exception) {
             // IPv4 DNS filtering still works on devices/networks without IPv6 support.
         }
@@ -396,58 +458,63 @@ class AdBlockVpnService : VpnService() {
         isRunning = true
         state = "connected"
         totalBlocked = 0
+        blockedCount.set(0)
+        clearRecentBlockedDomains()
 
+        val sessionInterface = vpnInterface!!
         workerThread = thread(start = true, name = "AdBlockVpnDnsLoop") {
-            runPacketLoop()
+            runPacketLoop(sessionInterface)
         }
     }
 
-    @Synchronized private fun stopVpn() {
+    private fun stopVpn() {
+        startupGeneration++
         cancelled.set(true)
         running.set(false)
         isRunning = false
-        state = "disconnected"
+        state = "disconnecting"
         dnsWorkers.shutdownNow()
+        synchronized(activeSockets) {
+            activeSockets.forEach { it.close() }
+            activeSockets.clear()
+        }
+        workerThread?.interrupt()
+        workerThread = null
         try {
             vpnInterface?.close()
         } catch (_: Exception) {
         }
         vpnInterface = null
         stopForeground(STOP_FOREGROUND_REMOVE)
+        state = "disconnected"
         stopSelf()
     }
 
-    @Synchronized override fun onDestroy() {
-        cancelled.set(true)
-        running.set(false)
-        isRunning = false
-        state = "disconnected"
-        dnsWorkers.shutdownNow()
-        try {
-            vpnInterface?.close()
-        } catch (_: Exception) {
-        }
+    override fun onDestroy() {
+        stopVpn()
         super.onDestroy()
     }
 
     override fun onRevoke() {
-        stopVpn()
-        super.onRevoke()
+        mainHandler.post { stopVpn() }
     }
 
-    private fun runPacketLoop() {
-        val fd = vpnInterface ?: return
+    private fun runPacketLoop(fd: ParcelFileDescriptor) {
         val input = FileInputStream(fd.fileDescriptor)
         val output = FileOutputStream(fd.fileDescriptor)
         val packet = ByteArray(32767)
 
-        while (running.get()) {
+        while (running.get() && vpnInterface === fd) {
             val length = try {
                 input.read(packet)
             } catch (_: Exception) {
                 break
             }
-            if (length <= 0) continue
+            if (length <= 0) {
+                // Android's TUN is nonblocking. Avoid spinning when it is idle.
+                try { Thread.sleep(10) } catch (_: InterruptedException) { break }
+                continue
+            }
 
             try {
                 handleIpPacket(packet, length, output)
@@ -455,7 +522,9 @@ class AdBlockVpnService : VpnService() {
                 // Malformed or unsupported packet. Drop it and keep the VPN loop alive.
             }
         }
-        if (running.get()) stopVpn()
+        mainHandler.post {
+            if (running.get() && vpnInterface === fd) stopVpn()
+        }
     }
 
     private fun handleIpPacket(packet: ByteArray, length: Int, output: FileOutputStream) {
@@ -534,6 +603,7 @@ class AdBlockVpnService : VpnService() {
         dstPort: Int
     ) {
         totalBlocked = blockedCount.incrementAndGet()
+        recordBlocked(question.name)
         reportStats()
         val response = buildDnsNoDataResponse(dnsPayload, question)
         sendUdpResponse(output, srcIp, srcPort, dstIp, dstPort, response)
@@ -589,9 +659,9 @@ class AdBlockVpnService : VpnService() {
     private fun buildDnsNoDataResponse(query: ByteArray, question: DnsQuestion): ByteArray {
         val response = query.copyOf(question.endOffset)
         response[2] = (0x80 or (query[2].toInt() and 0x01)).toByte()
-        // NXDOMAIN prevents ad SDKs from treating the empty answer as a
-        // successful lookup and retrying the same ad endpoint.
-        response[3] = 0x83.toByte()
+        // NOERROR/NODATA avoids an explicit nonexistent-domain error in
+        // compatibility mode. Missing ad responses can still be detected.
+        response[3] = (if (policy.compatibility) 0x80 else 0x83).toByte()
         writeU16(response, 4, 1)
         writeU16(response, 6, 0)
         writeU16(response, 8, 0)
@@ -612,10 +682,15 @@ class AdBlockVpnService : VpnService() {
             var socket: DatagramSocket? = null
             try {
                 socket = DatagramSocket()
+                synchronized(activeSockets) {
+                    if (!running.get() || Thread.currentThread().isInterrupted) return@execute
+                    activeSockets.add(socket)
+                }
                 if (!protect(socket)) return@execute
                 socket.soTimeout = 3500
 
-                for (upstream in upstreamResolversFor(requestedDnsIp)) {
+                for (upstream in policy.resolvers(question.name).map { InetAddress.getByName(it) }) {
+                    if (socket.isClosed || Thread.currentThread().isInterrupted) return@execute
                     try {
                         socket.connect(upstream, DNS_PORT)
                         val outPacket = DatagramPacket(dnsQuery, dnsQuery.size, upstream, DNS_PORT)
@@ -631,7 +706,9 @@ class AdBlockVpnService : VpnService() {
                         val replyQuestion = parseDnsQuestion(reply) ?: continue
                         if (!replyQuestion.name.equals(question.name, ignoreCase = true) ||
                             replyQuestion.type != question.type) continue
-                        if (dnsResponseReferencesBlockedDomain(reply)) {
+                        // An explicit exception also permits its CNAME chain;
+                        // otherwise a shared CDN alias could defeat the exception.
+                        if (!policy.bypassBlocklist(question.name) && dnsResponseReferencesBlockedDomain(reply)) {
                             blockAndReply(
                                 dnsQuery,
                                 question,
@@ -650,18 +727,8 @@ class AdBlockVpnService : VpnService() {
                     }
                 }
             } finally {
+                synchronized(activeSockets) { activeSockets.remove(socket) }
                 socket?.close()
-            }
-        }
-    }
-
-    private fun upstreamResolversFor(requestedDnsIp: InetAddress): List<InetAddress> {
-        // Always use filtering resolvers, including intercepted hardcoded DNS.
-        return DEFAULT_UPSTREAM_DNS.mapNotNull {
-            try {
-                InetAddress.getByName(it)
-            } catch (_: Exception) {
-                null
             }
         }
     }

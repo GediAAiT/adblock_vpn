@@ -50,6 +50,7 @@ flutter {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     // Used by AdBlockVpnService for NotificationCompat.
     implementation("androidx.core:core-ktx:1.12.0")
     // Pinned OpenVPN engine; the app owns permission and connection lifecycle.

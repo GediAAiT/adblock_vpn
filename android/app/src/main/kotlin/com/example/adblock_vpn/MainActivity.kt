@@ -30,6 +30,56 @@ class MainActivity : FlutterActivity() {
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
+                "getCompatibilitySettings" -> {
+                    val prefs = getSharedPreferences("local_dns", MODE_PRIVATE)
+                    result.success(mapOf(
+                        "compatibility" to prefs.getBoolean("compatibility", false),
+                        "allowedDomains" to prefs.getStringSet("allowedDomains", emptySet())!!.sorted(),
+                        "excludedPackages" to prefs.getStringSet("excludedPackages", emptySet())!!.sorted(),
+                        "recentBlockedDomains" to AdBlockVpnService.recentBlockedDomains()
+                    ))
+                }
+                "getCompatibilityApps" -> executor.execute {
+                    try {
+                        val apps = packageManager.queryIntentActivities(
+                            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
+                        ).map { info ->
+                            mapOf("packageName" to info.activityInfo.packageName,
+                                "label" to info.loadLabel(packageManager).toString())
+                        }.filter { it["packageName"] != packageName }
+                            .distinctBy { it["packageName"] }
+                            .sortedBy { it["label"]?.lowercase() }
+                        runOnUiThread { result.success(apps) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("APPS_UNAVAILABLE", e.message, null) }
+                    }
+                }
+                "clearRecentBlockedDomains" -> {
+                    AdBlockVpnService.clearRecentBlockedDomains()
+                    result.success(null)
+                }
+                "setCompatibilitySettings" -> {
+                    if (pendingResult != null || AdBlockVpnService.state != "disconnected" ||
+                        RemoteVpnService.state !in listOf("disconnected", "error")) {
+                        result.error("BUSY", "Stop protection before changing compatibility settings.", null)
+                    } else try {
+                        val domains = LocalDnsPolicy.parseAllowedDomains(
+                            call.argument<List<String>>("allowedDomains") ?: emptyList()
+                        )
+                        val excluded = (call.argument<List<String>>("excludedPackages") ?: emptyList()).toSet()
+                        require(excluded.size <= 100 && excluded.all {
+                            it != packageName && it.length <= 255 &&
+                                it.matches(Regex("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+"))
+                        }) { "Select up to 100 apps to bypass protection." }
+                        getSharedPreferences("local_dns", MODE_PRIVATE).edit()
+                            .putBoolean("compatibility", call.argument<Boolean>("compatibility") ?: false)
+                            .putStringSet("allowedDomains", domains)
+                            .putStringSet("excludedPackages", excluded).apply()
+                        result.success(null)
+                    } catch (e: IllegalArgumentException) {
+                        result.error("INVALID_DOMAIN", e.message, null)
+                    }
+                }
                 "startVpn" -> {
                     if (pendingResult != null) result.error("BUSY", "VPN request pending", null)
                     else {
@@ -81,7 +131,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "stopVpn" -> {
                     finishRequest("CANCELLED", "VPN request cancelled")
-                    stopService(Intent(this, AdBlockVpnService::class.java))
+                    disconnectLocalVpn()
                     if (RemoteVpnService.state != "disconnected") {
                         RemoteVpnService.state = "disconnecting"
                         startService(Intent(this, RemoteVpnService::class.java).apply {
@@ -131,7 +181,7 @@ class MainActivity : FlutterActivity() {
                         action = AdBlockVpnService.ACTION_CONNECT
                     })
             } else {
-                stopService(Intent(this, AdBlockVpnService::class.java))
+                disconnectLocalVpn()
                 ProfileManager.setTemporaryProfile(this, profile)
                 val intent = profile.prepareStartService(this)
                     ?: throw IllegalStateException("Unable to prepare OpenVPN service")
@@ -165,6 +215,14 @@ class MainActivity : FlutterActivity() {
         }
         pendingResult = null
         pendingProfile = null
+    }
+
+    private fun disconnectLocalVpn() {
+        // VpnService may remain bound to Android after stopService(). Deliver
+        // an explicit command so the TUN and DNS sockets close immediately.
+        startService(Intent(this, AdBlockVpnService::class.java).apply {
+            action = AdBlockVpnService.ACTION_DISCONNECT
+        })
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
