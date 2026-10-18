@@ -45,11 +45,14 @@ The project currently signs release builds with the development debug key. Confi
 
 ### App compatibility
 
-**Automatic HDO Box compatibility** is enabled by default. When the installed
-package `com.hdoapp.hdo_box` is present, both Local ad blocker and Free VPN
-exclude it from the tunnel. HDO Box uses the normal connection and may load
-ads; other apps keep protection. Close and reopen HDO Box after reconnecting.
-You can disable this in **App compatibility** while protection is stopped.
+HDO Box is filtered by default. This update resets the previous automatic HDO
+bypass and gentler compatibility mode once, and removes HDO Box from manually
+bypassed apps. Other app and domain exceptions are preserved.
+
+**Allow HDO Box ads for playback** is an optional bypass, disabled by default.
+Enabling it excludes package `com.hdoapp.hdo_box` from both VPN modes, allowing
+its normal connection and ads. Leave it off to filter HDO Box. Close and reopen
+HDO Box after reconnecting. HDO Box can refuse playback while ads are blocked.
 This does not override filtering configured in Android Private DNS or on a
 router, and does not guarantee that every app check will pass.
 

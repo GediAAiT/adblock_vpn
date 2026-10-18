@@ -26,6 +26,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        AppCompatibility.prepareSettings(this)
         OpenVPNService.setNotificationActivityClass(MainActivity::class.java)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel.setMethodCallHandler { call, result ->
@@ -34,7 +35,7 @@ class MainActivity : FlutterActivity() {
                     val prefs = getSharedPreferences("local_dns", MODE_PRIVATE)
                     result.success(mapOf(
                         "compatibility" to prefs.getBoolean("compatibility", false),
-                        "automaticHdoBypass" to prefs.getBoolean("automaticHdoBypass", true),
+                        "automaticHdoBypass" to prefs.getBoolean("automaticHdoBypass", false),
                         "allowedDomains" to prefs.getStringSet("allowedDomains", emptySet())!!.sorted(),
                         "excludedPackages" to prefs.getStringSet("excludedPackages", emptySet())!!.sorted(),
                         "recentBlockedDomains" to AdBlockVpnService.recentBlockedDomains()
@@ -74,7 +75,7 @@ class MainActivity : FlutterActivity() {
                         }) { "Select up to 100 apps to bypass protection." }
                         getSharedPreferences("local_dns", MODE_PRIVATE).edit()
                             .putBoolean("compatibility", call.argument<Boolean>("compatibility") ?: false)
-                            .putBoolean("automaticHdoBypass", call.argument<Boolean>("automaticHdoBypass") ?: true)
+                            .putBoolean("automaticHdoBypass", call.argument<Boolean>("automaticHdoBypass") ?: false)
                             .putStringSet("allowedDomains", domains)
                             .putStringSet("excludedPackages", excluded).apply()
                         result.success(null)

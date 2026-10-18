@@ -14,7 +14,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
   static const _channel = MethodChannel('com.example.adblock_vpn/vpn');
   final _domains = TextEditingController();
   bool _enabled = false;
-  bool _automaticHdoBypass = true;
+  bool _automaticHdoBypass = false;
   bool _loading = true;
   bool _saving = false;
   List<String> _recent = [];
@@ -60,7 +60,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
       setState(() {
         if (!recentOnly) {
           _enabled = settings['compatibility'] == true;
-          _automaticHdoBypass = settings['automaticHdoBypass'] != false;
+          _automaticHdoBypass = settings['automaticHdoBypass'] == true;
           _domains.text =
               List<String>.from(settings['allowedDomains'] ?? []).join('\n');
           _excludedPackages =
@@ -150,7 +150,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
           SwitchListTile(
             key: const Key('dnsCompatibility'),
             contentPadding: EdgeInsets.zero,
-            title: const Text('Compatibility mode'),
+            title: const Text('Compatibility mode (may allow ads)'),
             subtitle: const Text('Use gentler DNS blocking and let apps use '
                 'their own DNS connections. This may allow more ads.'),
             value: _enabled,
@@ -160,10 +160,11 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
           SwitchListTile(
             key: const Key('automaticHdoBypass'),
             contentPadding: EdgeInsets.zero,
-            title: const Text('Automatic HDO Box compatibility'),
-            subtitle: const Text('Let HDO Box use your normal connection in '
-                'both modes. Other apps keep protection. Close and reopen '
-                'HDO Box after reconnecting. Android Private DNS still applies.'),
+            title: const Text('Allow HDO Box ads for playback'),
+            subtitle: const Text(
+                'Disables ad blocking for HDO Box in both modes. '
+                'Keep this off to block its ads. HDO Box may refuse playback '
+                'when ads are blocked. Close and reopen it after reconnecting.'),
             value: _automaticHdoBypass,
             onChanged: editable
                 ? (value) => setState(() => _automaticHdoBypass = value)

@@ -254,7 +254,7 @@ class AdBlockVpnService : VpnService() {
                 thread(start = true, name = "AdBlockVpnStartup") {
                     try {
                         val loadedBlocklist = loadBlocklist()
-                        val prefs = getSharedPreferences("local_dns", MODE_PRIVATE)
+                        val prefs = AppCompatibility.prepareSettings(this)
                         val loadedPolicy = LocalDnsPolicy(
                             prefs.getBoolean("compatibility", false),
                             prefs.getStringSet("allowedDomains", emptySet())!!.toSet()
