@@ -136,8 +136,9 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
         padding: const EdgeInsets.all(20),
         children: [
           const Text(
-            'App bypass works in both Local ad blocker and Free VPN. '
-            'Bypassed apps use your normal connection and may show ads. '
+            'HDO Box, MovieBox, and Playfy are protected by default in both '
+            'Local ad blocker and Free VPN modes. App bypass lets selected '
+            'apps use your normal connection outside the tunnel. '
             'DNS compatibility and domain exceptions apply to local mode only.',
           ),
           if (widget.readOnly)
@@ -150,7 +151,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
           SwitchListTile(
             key: const Key('dnsCompatibility'),
             contentPadding: EdgeInsets.zero,
-            title: const Text('Compatibility mode (may allow ads)'),
+            title: const Text('Compatibility mode'),
             subtitle: const Text('Use gentler DNS blocking and let apps use '
                 'their own DNS connections. This may allow more ads.'),
             value: _enabled,
@@ -160,11 +161,10 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
           SwitchListTile(
             key: const Key('automaticHdoBypass'),
             contentPadding: EdgeInsets.zero,
-            title: const Text('Allow HDO Box ads for playback'),
-            subtitle: const Text(
-                'Disables ad blocking for HDO Box in both modes. '
-                'Keep this off to block its ads. HDO Box may refuse playback '
-                'when ads are blocked. Close and reopen it after reconnecting.'),
+            title: const Text('Automatic HDO Box compatibility'),
+            subtitle: const Text('Disabled by default so HDO Box ads are '
+                'blocked. Enable only if you want HDO Box to bypass the VPN '
+                'tunnel entirely.'),
             value: _automaticHdoBypass,
             onChanged: editable
                 ? (value) => setState(() => _automaticHdoBypass = value)
@@ -175,11 +175,10 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
             title: const Text('Apps that bypass protection'),
             subtitle: Text('${_excludedPackages.length} selected manually'),
             children: [
-              const Text('If an app such as HDO Box still refuses to work, '
-                  'select it here. It will use your normal connection and may '
-                  'show ads. Other apps keep protection. Save, start '
-                  'protection, then close and reopen the selected app. '
-                  'This cannot guarantee that every VPN check will pass.'),
+              const Text('If an app still refuses to work, select it here to '
+                  'use your normal connection outside the tunnel. Selected '
+                  'apps will not be ad-filtered. Save, start protection, then '
+                  'close and reopen the selected app.'),
               TextField(
                 key: const Key('appSearch'),
                 decoration: const InputDecoration(labelText: 'Search apps'),

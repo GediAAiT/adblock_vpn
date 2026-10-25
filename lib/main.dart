@@ -55,6 +55,7 @@ class _HomePageState extends State<HomePage>
   List<VpnServer> _servers = [];
   VpnServer? _selectedServer;
   String? _error;
+  String _privateDnsWarning = '';
   String _remoteState = 'disconnected';
   int _bytesIn = 0;
   DateTime? _startedAt;
@@ -119,6 +120,7 @@ class _HomePageState extends State<HomePage>
         _busy = connecting || _requestPending;
         _blockedCount = state['blockedCount'] as int? ?? 0;
         _bytesIn = state['bytesIn'] as int? ?? 0;
+        _privateDnsWarning = state['privateDnsWarning'] as String? ?? '';
         _status = connected
             ? (_remoteMode ? 'VPN connected' : 'DNS filtering active')
             : connecting
@@ -344,6 +346,37 @@ class _HomePageState extends State<HomePage>
                         ),
                       ),
                     ),
+                    if (_privateDnsWarning.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                        child: Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                                color: Colors.amberAccent.withValues(alpha: 0.5)),
+                          ),
+                          child: Column(
+                            children: [
+                              Text(
+                                _privateDnsWarning,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: Colors.amberAccent, fontSize: 13),
+                              ),
+                              const SizedBox(height: 8),
+                              TextButton.icon(
+                                onPressed: () => _channel
+                                    .invokeMethod('openPrivateDnsSettings'),
+                                icon: const Icon(Icons.settings, size: 16),
+                                label:
+                                    const Text('Open Android DNS Settings'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     if (_remoteMode) ...[
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -538,8 +571,8 @@ class _HomePageState extends State<HomePage>
                       padding: const EdgeInsets.symmetric(horizontal: 40),
                       child: Text(
                         _remoteMode
-                            ? 'OpenVPN with AdGuard ad-filtering DNS.\nApps using their own encrypted DNS may bypass filtering.'
-                            : 'Local DNS filtering across apps and browsers.\nYour public IP stays the same.',
+                            ? 'OpenVPN with ad-filtering DNS.\nFor stealth anti-detection in HDO Box, use Local ad blocker.'
+                            : 'Stealth local DNS & sinkhole filtering across apps.\nUndetectable by Custom DNS / AdGuard checks.',
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                             color: Colors.white54, fontSize: 13, height: 1.5),
@@ -549,7 +582,7 @@ class _HomePageState extends State<HomePage>
                     const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 24),
                         child: Text(
-                            'Blocks known third-party ad domains. Ads sharing video servers or already cached may still appear.',
+                            'Blocks third-party ad domains with stealth sinkhole resolution so apps never detect custom DNS.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 color: Colors.white54, fontSize: 12))),

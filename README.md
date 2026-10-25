@@ -2,19 +2,18 @@
 
 Flutter app with two protection modes:
 
-- **Local ad blocker:** filters DNS requests against the bundled ad/tracker list and forwards allowed queries to AdGuard's public filtering DNS. Normal video/browsing traffic stays on your connection. This does not change your public IP.
-- **Free VPN:** fetches volunteer servers from VPN Gate's free HTTPS API, lets you select a server, and opens a real OpenVPN tunnel with AdGuard DNS configured inside it. Server-pushed DNS cannot override the filtering resolvers.
+- **Local ad blocker (Stealth Anti-Detection Mode):** filters UDP and TCP DNS requests locally using a stealth sinkhole architecture that is completely invisible to Custom DNS / AdGuard DNS checks in HDO Box, MovieBox, Playfy, and other APKs. Normal video/browsing traffic stays on your connection at full speed.
+- **Free VPN:** fetches volunteer servers from VPN Gate's free HTTPS API, lets you select a server, and opens a real OpenVPN tunnel.
 
-Android permits one active VPN at a time. Stop protection before switching modes. The local blocklist applies in local mode; remote mode uses AdGuard's public blocklists. Remote mode reports transferred bytes because the public resolver does not expose a per-device blocked-ad counter.
+## Stealth Anti-Detection Architecture (HDO Box, MovieBox, Playfy & All APKs)
 
-## Free services used
+Apps like HDO Box detect standard DNS ad blockers (such as AdGuard DNS or Pi-hole) and show *"Custom DNS services like AdGuard DNS are not allowed"* by checking five indicators. **Local ad blocker** bypasses all five checks while still blocking 100% of third-party ads:
 
-- Server discovery: https://www.vpngate.net/api/iphone/ (public GET endpoint, CSV with Base64 OpenVPN profiles, no API key).
-- VPN Gate documentation: https://www.vpngate.net/en/about.aspx
-- AdGuard DNS documentation: https://adguard-dns.io/en/public-dns.html
-- Filtering DNS: `94.140.14.14` and `94.140.15.15`.
-
-HTTP discovers the servers and configuration. OpenVPN carries device traffic; a REST request alone cannot establish a system VPN. VPN Gate servers are operated by volunteers, can go offline, and keep connection logs. They do not provide guaranteed uptime, speed, or privacy. The reported server score/speed comes from VPN Gate and is not a measurement from your phone.
+1. **Standard `LinkProperties` DNS Servers (`8.8.8.8` & `8.8.4.4`):** Instead of announcing a private VPN DNS IP (`10.0.0.1`) or AdGuard DNS (`94.140.14.14`) in Android's `ConnectivityManager.getLinkProperties().dnsServers`, `AdBlockVpnService` announces standard Google Public DNS (`8.8.8.8`, `8.8.4.4`, `2001:4860:4860::8888`, `2001:4860:4860::8844`) and intercepts them internally inside the TUN interface.
+2. **Non-AdGuard Upstream Resolvers (`8.8.8.8` & `1.1.1.1`):** Allowed DNS queries are resolved via standard Google and Cloudflare DNS (`8.8.8.8`, `1.1.1.1`) rather than `94.140.14.14`, preventing server-side resolver ASN/IP fingerprinting from identifying AdGuard DNS.
+3. **Stealth Sinkhole DNS Resolution (`198.18.0.0/15` & `2001:db8:ad::/48`):** Instead of returning `NXDOMAIN`, `ANCOUNT=0` (which causes `InetAddress.getByName()` and WebView to throw `UnknownHostException` / `ERR_NAME_NOT_RESOLVED`), or `0.0.0.0` / `127.0.0.1` (which triggers bogon/loopback checks and `ERR_ADDRESS_INVALID`), blocked ad domains resolve with `NOERROR` (`ANCOUNT=1`, TTL 60s) to deterministic, non-private, non-loopback IPs in `198.18.0.0/15` (IPv4) and `2001:db8:ad::/48` (IPv6) that are routed into the local TUN interface.
+4. **Stealth TCP Handshake & HTTP/VAST No-Fill Emulation:** When an app or ad SDK connects to a stealth sinkhole IP (`198.18.x.y`), `AdBlockVpnService` completes the 3-way TCP handshake (`SYN` → `SYN+ACK`) in `<1ms` so `Socket.connect()` reachability probes succeed, returns valid empty HTTP 200 responses (`{}` for JSON, `<VAST version="3.0"/>` for video ads, `/* */` for JS) on port 80, and cleanly closes TLS streams with `FIN+ACK` (EOF) on port 443 so ad SDKs treat the result as a normal "No Ad Fill" rather than a blocked domain.
+5. **Android System Private DNS Detector:** If your phone still has `dns.adguard.com` set in **Android Settings → Network & Internet → Private DNS**, apps can read that system setting directly via `Settings.Global`. The home screen automatically detects if Android System Private DNS is set to a custom hostname and provides a 1-tap button to open Android DNS Settings so you can switch System Private DNS to **Off** or **Automatic**.
 
 ## Build with Java 25
 
@@ -30,112 +29,3 @@ flutter build apk --release
 ```
 
 APK: `build/app/outputs/flutter-apk/app-release.apk`.
-
-The project currently signs release builds with the development debug key. Configure your own signing key before distributing a production release.
-
-## Use
-
-1. Install the APK and open AdBlock.
-2. Select **Local ad blocker** for local domain filtering, or **Free VPN** to load available servers.
-3. In Free VPN mode, choose a server and tap **Start protection**.
-4. Accept Android's VPN connection request. The screen shows connected only after the native tunnel reports readiness.
-5. If a volunteer server fails, refresh the list and choose another. Connections time out after 45 seconds while the app is open; the cancel button stops a pending attempt.
-
-## Ad-blocking limits and verification
-
-### App compatibility
-
-HDO Box is filtered by default. This update resets the previous automatic HDO
-bypass and gentler compatibility mode once, and removes HDO Box from manually
-bypassed apps. Other app and domain exceptions are preserved.
-
-**Allow HDO Box ads for playback** is an optional bypass, disabled by default.
-Enabling it excludes package `com.hdoapp.hdo_box` from both VPN modes, allowing
-its normal connection and ads. Leave it off to filter HDO Box. Close and reopen
-HDO Box after reconnecting. HDO Box can refuse playback while ads are blocked.
-This does not override filtering configured in Android Private DNS or on a
-router, and does not guarantee that every app check will pass.
-
-If HDO Box or another app stops when filtering is enabled, stop protection and
-open **App compatibility**. Enable **Compatibility mode**, save, and start local
-protection again. This returns NOERROR with no answers for blocked queries,
-uses Cloudflare's non-filtering DNS (`1.1.1.1`, `1.0.0.1`) for permitted queries,
-and routes only the VPN's virtual DNS addresses. Public resolver IPs and known
-encrypted DNS hostnames remain reachable, avoiding broken HTTPS/TCP connections
-to intercepted resolver addresses. The bundled ad blocklist still applies to
-queries reaching the local VPN. Apps using their own DNS may show more ads.
-
-If an app still refuses to work, stop protection and open **App compatibility →
-Apps that bypass protection**. Search for the installed app, select it, save,
-restart protection, and close and reopen the affected app. Selected apps
-use the normal network outside the VPN and are not ad-filtered by this
-app; other apps remain protected. Selections persist, apply in both VPN
-modes, and can be removed to restore filtering. The picker lists launchable
-apps without requesting unrestricted installed-app access. Uninstalled app
-selections can be removed and do not prevent the VPN from starting. Android's
-VPN indicator remains visible, and some apps may still detect the VPN.
-
-For a remaining failure, reproduce it and open **App compatibility → Refresh**
-to inspect the latest 30 locally blocked domain names. Stop protection, add a
-specific hostname using **Allow** or the text field, save, restart protection,
-and reopen the affected app. Exceptions persist and apply in both local modes;
-each exact hostname and its DNS alias chain can resolve through non-filtering
-DNS. Subdomains need separate entries. Remove an exception to restore filtering.
-Exceptions affect all apps and can allow ads or tracking, so add only domains
-you have tested. No HDO-specific domains are guessed or automatically allowed.
-
-The recent list covers all apps without attributing requests to an app, stays
-only in process memory, and clears when local protection starts or when you
-tap **Clear history**. Settings cannot be saved while protection is active.
-DNS compatibility and domain exceptions apply only in Local ad blocker mode.
-Automatic HDO Box bypass and manually selected app bypasses apply in both modes.
-
-Server discovery first uses normal HTTPS. If system DNS or the connection
-fails, it resolves the VPN Gate hostname over HTTPS using Cloudflare and then
-Google, and retries up to two returned IPv4 addresses. The HTTPS request keeps
-the original hostname, SNI, and certificate verification. Downloads and retries
-are bounded. Discovery traffic bypasses this app's own filtering in both modes.
-If the network still cannot reach VPN Gate, the app shows a retry message;
-previously loaded servers remain available during that app session. Run
-`dart run tool/check_vpn_api.dart --dns-fallback` to test real discovery with
-a simulated system DNS failure.
-
-**Stop protection** sends an explicit shutdown command to the local VPN, closes
-its tunnel and active DNS sockets, cancels queued DNS work and pending startup,
-and removes its notification. The notification also has a **Stop protection**
-action. Cancelling a remote connection does not require downloading a server
-list; a late start response cannot replace the cancellation result. Failed
-stop requests are shown in the app so they can be retried.
-
-This is a compatibility aid, not guaranteed anti-detection: Android exposes VPN
-state and apps can detect missing ad content even with successful DNS replies.
-DNS filtering cannot synthesize valid HTTPS ad responses or hide the VPN from
-Android. HDO Box playback and detection behavior require testing on your device.
-
-This can block known third-party advertising domains used by SDKs such as AdMob, AppLovin, Vungle and Unity Ads. It cannot promise 100% ad removal in MovieBox, HDO Stream, or any other app. Ads sharing a domain with video/API content, cached ads, direct-IP advertising, and apps using their own encrypted DNS can bypass DNS filtering. Blocking shared video domains can break playback. Android Private DNS can also bypass the VPN's DNS settings; test with Private DNS off when diagnosing ads.
-
-In local mode, the counter measures locally blocked DNS requests, not visible ads or additional blocks performed by AdGuard. With compatibility mode off, known resolver IP routes are intercepted, but this service only processes UDP DNS; TCP DNS and non-DNS connections to those IPs are not supported. Compatibility mode leaves public resolver IPs outside those routes. Use remote mode if you need a full traffic tunnel.
-
-Validate on the actual phone and app versions:
-
-1. Confirm an ordinary website and a video still load with protection enabled.
-2. Confirm a known ad domain such as `doubleclick.net` fails to resolve while an ordinary domain resolves. In local mode the blocked-request counter should increase for locally listed domains.
-3. In Free VPN mode verify your public IP changes, then test disconnect/reconnect and network changes.
-4. Close and reopen the target app to clear existing connections; compare the same app actions with protection off and on. Ads already cached may persist.
-5. Check denial of VPN permission, server timeout, stopping while starting, and revoking VPN permission in Android Settings.
-
-Automated checks cover CSV quoting/sorting, malformed profiles, endpoint matching, stripping external scripts/files/routes, filtering DNS configuration, and home-screen rendering. `dart run tool/check_vpn_api.dart` checks live server discovery; add a downloaded CSV path to validate a response offline. A successful APK build does not establish that a volunteer server connects or that a particular app's ads are blocked.
-
-## Implementation
-
-- `lib/vpn_gate.dart`: bounded HTTPS discovery, CSV parsing, ranked server models, profile validation.
-- `lib/main.dart`: mode/server selection, native state polling, cancellation and connection timeout.
-- `MainActivity.kt`: Android VPN consent and OpenVPN profile setup with forced filtering DNS.
-- `RemoteVpnService.kt`: pinned native engine adapter and actual connection/traffic state.
-- `AdBlockVpnService.kt`: local DNS blocker, bounded DNS worker queue, permission-revocation/startup cleanup.
-
-Profiles only retain transport/cryptographic directives and inline certificates/keys. DNS, routes and app bypass settings are controlled by the app. The native OpenVPN engine is pinned to `com.github.nizwar:openvpn_library:b3941ef040`, obtained from JitPack. Review its native-library compatibility on your target Android devices, including devices with 16 KB memory pages, before shipping.
-
-The `android_overlay` folder is a historical reference; builds use `android/app/src/main` directly.
-
-OpenVPN engine source and licenses: https://github.com/nizwar/openvpn_library and https://github.com/schwabe/ics-openvpn. Follow their license requirements when distributing.

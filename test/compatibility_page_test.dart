@@ -135,7 +135,7 @@ void main() {
     expect(save.arguments['allowedDomains'], ['api.example.com']);
   });
 
-  testWidgets('HDO ad blocking defaults on and bypass requires opting in',
+  testWidgets('HDO automatic bypass defaults off so HDO Box is protected',
       (tester) async {
     await tester.pumpWidget(
         const MaterialApp(home: CompatibilityPage(readOnly: false)));

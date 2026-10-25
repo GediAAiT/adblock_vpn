@@ -3,6 +3,7 @@ package com.example.adblock_vpn
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import de.blinkt.openvpn.VpnProfile
 import de.blinkt.openvpn.core.ConfigParser
@@ -24,18 +25,32 @@ class MainActivity : FlutterActivity() {
     private var requestGeneration = 0
     private lateinit var channel: MethodChannel
 
+    private fun getSystemPrivateDnsWarning(): String {
+        return try {
+            val mode = Settings.Global.getString(contentResolver, "private_dns_mode") ?: ""
+            val specifier = Settings.Global.getString(contentResolver, "private_dns_specifier") ?: ""
+            if (mode == "hostname" && specifier.isNotBlank()) {
+                "Android Private DNS is set to \"$specifier\" in system settings. Apps like HDO Box read this setting directly — tap below to set Private DNS to Off or Automatic."
+            } else {
+                ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        AppCompatibility.prepareSettings(this)
         OpenVPNService.setNotificationActivityClass(MainActivity::class.java)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getCompatibilitySettings" -> {
                     val prefs = getSharedPreferences("local_dns", MODE_PRIVATE)
+                    val autoHdoBypass = AppCompatibility.isAutomaticHdoBypassEnabled(this)
                     result.success(mapOf(
                         "compatibility" to prefs.getBoolean("compatibility", false),
-                        "automaticHdoBypass" to prefs.getBoolean("automaticHdoBypass", false),
+                        "automaticHdoBypass" to autoHdoBypass,
                         "allowedDomains" to prefs.getStringSet("allowedDomains", emptySet())!!.sorted(),
                         "excludedPackages" to prefs.getStringSet("excludedPackages", emptySet())!!.sorted(),
                         "recentBlockedDomains" to AdBlockVpnService.recentBlockedDomains()
@@ -43,9 +58,13 @@ class MainActivity : FlutterActivity() {
                 }
                 "getCompatibilityApps" -> executor.execute {
                     try {
-                        val apps = packageManager.queryIntentActivities(
+                        val launcherApps = packageManager.queryIntentActivities(
                             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
-                        ).map { info ->
+                        )
+                        val leanbackApps = packageManager.queryIntentActivities(
+                            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0
+                        )
+                        val apps = (launcherApps + leanbackApps).map { info ->
                             mapOf("packageName" to info.activityInfo.packageName,
                                 "label" to info.loadLabel(packageManager).toString())
                         }.filter { it["packageName"] != packageName }
@@ -54,6 +73,19 @@ class MainActivity : FlutterActivity() {
                         runOnUiThread { result.success(apps) }
                     } catch (e: Exception) {
                         runOnUiThread { result.error("APPS_UNAVAILABLE", e.message, null) }
+                    }
+                }
+                "openPrivateDnsSettings" -> {
+                    try {
+                        startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                        result.success(null)
+                    } catch (_: Exception) {
+                        try {
+                            startActivity(Intent(Settings.ACTION_SETTINGS))
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("SETTINGS_UNAVAILABLE", e.message, null)
+                        }
                     }
                 }
                 "clearRecentBlockedDomains" -> {
@@ -76,6 +108,7 @@ class MainActivity : FlutterActivity() {
                         getSharedPreferences("local_dns", MODE_PRIVATE).edit()
                             .putBoolean("compatibility", call.argument<Boolean>("compatibility") ?: false)
                             .putBoolean("automaticHdoBypass", call.argument<Boolean>("automaticHdoBypass") ?: false)
+                            .putBoolean(AppCompatibility.PREF_HDO_BYPASS_MIGRATED, true)
                             .putStringSet("allowedDomains", domains)
                             .putStringSet("excludedPackages", excluded).apply()
                         result.success(null)
@@ -156,7 +189,8 @@ class MainActivity : FlutterActivity() {
                     "remoteError" to RemoteVpnService.lastError,
                     "serverName" to RemoteVpnService.serverName,
                     "bytesIn" to RemoteVpnService.bytesIn,
-                    "bytesOut" to RemoteVpnService.bytesOut
+                    "bytesOut" to RemoteVpnService.bytesOut,
+                    "privateDnsWarning" to getSystemPrivateDnsWarning()
                 ))
                 else -> result.notImplemented()
             }

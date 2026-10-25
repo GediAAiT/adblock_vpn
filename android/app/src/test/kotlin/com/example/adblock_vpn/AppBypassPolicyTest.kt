@@ -7,7 +7,15 @@ class AppBypassPolicyTest {
     private val own = "com.example.adblock_vpn"
     private val hdo = AppBypassPolicy.HDO_PACKAGE
 
-    @Test fun hdoBypassesAutomaticallyWithoutExemptingOtherApps() {
+    @Test fun hdoIsProtectedByDefaultWhenAutomaticBypassIsOff() {
+        assertEquals(setOf(own), AppBypassPolicy.resolve(
+            manual = emptySet(),
+            installed = setOf(own, hdo, "com.example.browser"),
+            ownPackage = own
+        ))
+    }
+
+    @Test fun hdoBypassesOnlyWhenExplicitlyEnabled() {
         assertEquals(setOf(own, hdo), AppBypassPolicy.resolve(true, emptySet(),
             setOf(own, hdo, "com.example.browser"), own))
     }
