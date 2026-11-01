@@ -53,7 +53,8 @@ class MainActivity : FlutterActivity() {
                         "automaticHdoBypass" to autoHdoBypass,
                         "allowedDomains" to prefs.getStringSet("allowedDomains", emptySet())!!.sorted(),
                         "excludedPackages" to prefs.getStringSet("excludedPackages", emptySet())!!.sorted(),
-                        "recentBlockedDomains" to AdBlockVpnService.recentBlockedDomains()
+                        "recentBlockedDomains" to AdBlockVpnService.recentBlockedDomains(),
+                        "recentAllowedDomains" to AdBlockVpnService.recentAllowedDomains()
                     ))
                 }
                 "getCompatibilityApps" -> executor.execute {

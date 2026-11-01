@@ -508,7 +508,26 @@ class AdBlockVpnService : VpnService() {
             "httpdns.huaweicloud.com",
             "httpdns.c.cdnhwc2.com",
             "httpdns.meituan.com",
-            "httpdns.yunxindns.com"
+            "httpdns.yunxindns.com",
+            // Gaps found for HDO Box / MovieBox / Playfy / Crify TV style APKs:
+            // Pangle/ByteDance, CAS, push-ad and popunder networks
+            "pangleglobal.com",
+            "byteoversea.com",
+            "ibytedtos.com",
+            "casthree.com",
+            "richpush.co",
+            "adskeeper.com",
+            "a-ads.com",
+            "ad.a-ads.com",
+            "popunder.net",
+            "pushwoosh.com",
+            "pushails.com",
+            "notix.io",
+            "pushnami.com",
+            "profitablecpmrate.com",
+            "highperformanceformat.com",
+            "effectivegatecpm.com",
+            "adexchangeclear.com"
         )
 
         @Volatile var isRunning: Boolean = false
@@ -522,9 +541,25 @@ class AdBlockVpnService : VpnService() {
         fun recentBlockedDomains(): List<String> = synchronized(recentBlocked) {
             recentBlocked.toList().asReversed()
         }
-        fun clearRecentBlockedDomains() = synchronized(recentBlocked) { recentBlocked.clear() }
+        fun clearRecentBlockedDomains() {
+            synchronized(recentBlocked) { recentBlocked.clear() }
+            synchronized(recentAllowed) { recentAllowed.clear() }
+        }
+        // Lookups that were let through, to find ad or detection domains still missing from the list.
+        private val recentAllowed = LinkedHashSet<String>()
+        fun recentAllowedDomains(): List<String> = synchronized(recentAllowed) {
+            recentAllowed.toList().asReversed()
+        }
+        private fun recordAllowed(host: String) = synchronized(recentAllowed) {
+            val normalized = LocalDnsPolicy.normalize(host)
+            android.util.Log.i("DNSDBG", "ALLOW $normalized") // TEMP-DEBUG
+            recentAllowed.remove(normalized)
+            recentAllowed.add(normalized)
+            while (recentAllowed.size > 150) recentAllowed.remove(recentAllowed.first())
+        }
         private fun recordBlocked(host: String) = synchronized(recentBlocked) {
             val normalized = LocalDnsPolicy.normalize(host)
+            android.util.Log.i("DNSDBG", "BLOCK $normalized") // TEMP-DEBUG
             recentBlocked.remove(normalized)
             recentBlocked.add(normalized)
             while (recentBlocked.size > 30) recentBlocked.remove(recentBlocked.first())
@@ -1080,6 +1115,7 @@ class AdBlockVpnService : VpnService() {
                         System.arraycopy(dnsReply, 0, tcpDnsReply, 2, dnsReply.size)
                         sendTcpResponse(output, dstIp, dstPort, srcIp, srcPort, ackNum, nextAck, 0x19, tcpDnsReply, isIpv6)
                     } else {
+                        recordAllowed(question.name)
                         sendTcpResponse(output, dstIp, dstPort, srcIp, srcPort, ackNum, nextAck, 0x10, ByteArray(0), isIpv6)
                         forwardTcpDnsToUpstream(dnsPayload, question, srcIp, srcPort, dstIp, dstPort, ackNum, nextAck, isIpv6, output)
                     }
@@ -1199,6 +1235,7 @@ class AdBlockVpnService : VpnService() {
         if (isBlocked(question.name)) {
             blockAndReply(dnsPayload, question, output, dstIp, dstPort, srcIp, srcPort)
         } else {
+            recordAllowed(question.name)
             forwardToUpstreamDns(dnsPayload, question, srcIp, srcPort, dstIp, dstPort, output)
         }
     }

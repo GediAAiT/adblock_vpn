@@ -18,6 +18,7 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
   bool _loading = true;
   bool _saving = false;
   List<String> _recent = [];
+  List<String> _recentAllowed = [];
   String? _error;
   Set<String> _excludedPackages = {};
   List<Map<String, String>> _apps = [];
@@ -67,6 +68,8 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
               Set<String>.from(settings['excludedPackages'] ?? []);
         }
         _recent = List<String>.from(settings['recentBlockedDomains'] ?? []);
+        _recentAllowed =
+            List<String>.from(settings['recentAllowedDomains'] ?? []);
         _loading = false;
         _error = null;
       });
@@ -109,7 +112,12 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
   Future<void> _clearRecent() async {
     try {
       await _channel.invokeMethod('clearRecentBlockedDomains');
-      if (mounted) setState(() => _recent = []);
+      if (mounted) {
+        setState(() {
+          _recent = [];
+          _recentAllowed = [];
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => _error = 'Cannot clear recent domains: $e');
     }
@@ -283,6 +291,14 @@ class _CompatibilityPageState extends State<CompatibilityPage> {
                 child: const Text('Allow'),
               ),
             ),
+          const SizedBox(height: 16),
+          Text('Recently allowed lookups',
+              style: Theme.of(context).textTheme.titleMedium),
+          const Text('Play a video, then check here for ad domains that were '
+              'not blocked.'),
+          if (!_loading && _recentAllowed.isEmpty)
+            const Text('No allowed lookups recorded yet.'),
+          for (final domain in _recentAllowed) SelectableText(domain),
         ],
       ),
     );
